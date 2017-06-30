@@ -16,171 +16,146 @@
 
 package com.android.example.github.ui.search;
 
-import com.android.example.github.repository.RepoRepository;
-import com.android.example.github.util.AbsentLiveData;
-import com.android.example.github.util.Objects;
-import com.android.example.github.vo.Repo;
-import com.android.example.github.vo.Resource;
-
 import android.arch.lifecycle.LiveData;
 import android.arch.lifecycle.MutableLiveData;
 import android.arch.lifecycle.Observer;
 import android.arch.lifecycle.Transformations;
 import android.arch.lifecycle.ViewModel;
-import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.support.annotation.VisibleForTesting;
-
-import java.util.List;
-import java.util.Locale;
-
+import com.android.example.github.repository.RepoRepository;
+import com.android.example.github.vo.Resource;
+import com.android.example.github.vo.Status;
 import javax.inject.Inject;
 
 public class SearchViewModel extends ViewModel {
 
-    private final MutableLiveData<String> query = new MutableLiveData<>();
+  private final RepoRepository repoRepository;
 
-    private final LiveData<Resource<List<Repo>>> results;
+  private final SearchState INITIAL_STATE =
+      new SearchState.Builder().query("").searchNotStarted(true).build();
 
-    private final NextPageHandler nextPageHandler;
+  private MutableLiveData<SearchState> stateLiveDate = new MutableLiveData<>();
 
-    @Inject
-    SearchViewModel(RepoRepository repoRepository) {
-        nextPageHandler = new NextPageHandler(repoRepository);
-        results = Transformations.switchMap(query, search -> {
-            if (search == null || search.trim().length() == 0) {
-                return AbsentLiveData.create();
-            } else {
-                return repoRepository.search(search);
-            }
-        });
+  // Some workaround, maybe there is a better way
+  private LiveData<SearchState> firstPageLiveData = null;
+  private Observer<SearchState> firstPageObserver = new Observer<SearchState>() {
+    @Override public void onChanged(@Nullable SearchState searchState) {
+      if (lastState().getQuery().equals(searchState.getQuery())) {
+        publishState(searchState);
+      }
+    }
+  };
+
+  private LiveData<Resource<Boolean>> nextPageLiveData = null;
+  private Observer<Resource<Boolean>> nextPageObserver = new Observer<Resource<Boolean>>() {
+    @Override public void onChanged(@Nullable Resource<Boolean> loadNextResource) {
+      if (loadNextResource != null) {
+        switch (loadNextResource.status) {
+          case SUCCESS: {
+            SearchState updatedState =
+                lastState().builder().nextPageLoading(false).nextPageError(null).build();
+
+            publishState(updatedState);
+            break;
+          }
+
+          case ERROR: {
+            SearchState updatedState = lastState().builder()
+                .nextPageLoading(false)
+                .nextPageError(loadNextResource.message)
+                .build();
+            publishState(updatedState);
+          }
+        }
+      }
+    }
+  };
+
+  @Inject SearchViewModel(RepoRepository repoRepository) {
+    this.repoRepository = repoRepository;
+  }
+
+  public LiveData<SearchState> state() {
+    return stateLiveDate;
+  }
+
+  public void search(String query) {
+
+    if (firstPageLiveData != null) {
+      // Some workaround: Similar to switchMap
+      firstPageLiveData.removeObserver(firstPageObserver);
     }
 
-    LiveData<Resource<List<Repo>>> getResults() {
-        return results;
+    if (query == null || query.length() == 0) {
+      publishState(INITIAL_STATE);
+      return;
     }
 
-    public void setQuery(@NonNull String originalInput) {
-        String input = originalInput.toLowerCase(Locale.getDefault()).trim();
-        if (Objects.equals(input, query.getValue())) {
-            return;
-        }
-        nextPageHandler.reset();
-        query.setValue(input);
+    // Show loading indicator
+    publishState(new SearchState.Builder().query(query)
+        .searchNotStarted(false)
+        .firstPageLoading(true)
+        .build());
+
+    firstPageLiveData = Transformations.map(repoRepository.search(query), resource -> {
+      if (resource.status == Status.SUCCESS) {
+        return lastState().builder()
+            .searchNotStarted(false)
+            .firstPageLoading(false)
+            .results(resource.data)
+            .nextPageError(null)
+            .nextPageLoading(false)
+            .build();
+      } else {
+        return lastState().builder()
+            .searchNotStarted(false)
+            .firstPageLoading(false)
+            .firstPageError(resource.message)
+            .nextPageError(null)
+            .nextPageLoading(false)
+            .build();
+      }
+    });
+
+    firstPageLiveData.observeForever(firstPageObserver);
+  }
+
+  public void nextPage() {
+    if (nextPageLiveData != null) {
+      nextPageLiveData.removeObserver(nextPageObserver);
+    }
+    publishState(lastState().builder().nextPageLoading(true).nextPageError(null).build());
+    nextPageLiveData = repoRepository.searchNextPage(lastState().getQuery());
+    nextPageLiveData.observeForever(nextPageObserver);
+  }
+
+  public void retrySearch(){
+    // Simple solution
+    search(lastState().getQuery());
+  }
+
+  public void clearNextPageErrorMessage() {
+    publishState(lastState().builder().nextPageError(null).build());
+  }
+
+
+  @Override protected void onCleared() {
+    super.onCleared();
+
+    if (firstPageLiveData != null) {
+      firstPageLiveData.removeObserver(firstPageObserver);
     }
 
-    LiveData<LoadMoreState> getLoadMoreStatus() {
-        return nextPageHandler.getLoadMoreState();
+    if (nextPageLiveData != null) {
+      nextPageLiveData.removeObserver(nextPageObserver);
     }
+  }
 
-    void loadNextPage() {
-        String value = query.getValue();
-        if (value == null || value.trim().length() == 0) {
-            return;
-        }
-        nextPageHandler.queryNextPage(value);
-    }
+  private SearchState lastState() {
+    return stateLiveDate.getValue();
+  }
 
-    void refresh() {
-        if (query.getValue() != null) {
-            query.setValue(query.getValue());
-        }
-    }
-
-    static class LoadMoreState {
-        private final boolean running;
-        private final String errorMessage;
-        private boolean handledError = false;
-
-        LoadMoreState(boolean running, String errorMessage) {
-            this.running = running;
-            this.errorMessage = errorMessage;
-        }
-
-        boolean isRunning() {
-            return running;
-        }
-
-        String getErrorMessage() {
-            return errorMessage;
-        }
-
-        String getErrorMessageIfNotHandled() {
-            if (handledError) {
-                return null;
-            }
-            handledError = true;
-            return errorMessage;
-        }
-    }
-
-    @VisibleForTesting
-    static class NextPageHandler implements Observer<Resource<Boolean>> {
-        @Nullable
-        private LiveData<Resource<Boolean>> nextPageLiveData;
-        private final MutableLiveData<LoadMoreState> loadMoreState = new MutableLiveData<>();
-        private String query;
-        private final RepoRepository repository;
-        @VisibleForTesting
-        boolean hasMore;
-
-        @VisibleForTesting
-        NextPageHandler(RepoRepository repository) {
-            this.repository = repository;
-            reset();
-        }
-
-        void queryNextPage(String query) {
-            if (Objects.equals(this.query, query)) {
-                return;
-            }
-            unregister();
-            this.query = query;
-            nextPageLiveData = repository.searchNextPage(query);
-            loadMoreState.setValue(new LoadMoreState(true, null));
-            //noinspection ConstantConditions
-            nextPageLiveData.observeForever(this);
-        }
-
-        @Override
-        public void onChanged(@Nullable Resource<Boolean> result) {
-            if (result == null) {
-                reset();
-            } else {
-                switch (result.status) {
-                    case SUCCESS:
-                        hasMore = Boolean.TRUE.equals(result.data);
-                        unregister();
-                        loadMoreState.setValue(new LoadMoreState(false, null));
-                        break;
-                    case ERROR:
-                        hasMore = true;
-                        unregister();
-                        loadMoreState.setValue(new LoadMoreState(false,
-                                result.message));
-                        break;
-                }
-            }
-        }
-
-        private void unregister() {
-            if (nextPageLiveData != null) {
-                nextPageLiveData.removeObserver(this);
-                nextPageLiveData = null;
-                if (hasMore) {
-                    query = null;
-                }
-            }
-        }
-
-        private void reset() {
-            unregister();
-            hasMore = true;
-            loadMoreState.setValue(new LoadMoreState(false, null));
-        }
-
-        MutableLiveData<LoadMoreState> getLoadMoreState() {
-            return loadMoreState;
-        }
-    }
+  private void publishState(SearchState newState) {
+    stateLiveDate.setValue(newState);
+  }
 }
