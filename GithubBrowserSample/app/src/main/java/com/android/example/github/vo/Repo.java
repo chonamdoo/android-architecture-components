@@ -54,6 +54,26 @@ public class Repo {
         this.stars = stars;
     }
 
+    @Override public String toString() {
+        return "Repo{"
+            + "id="
+            + id
+            + ", name='"
+            + name
+            + '\''
+            + ", fullName='"
+            + fullName
+            + '\''
+            + ", description='"
+            + description
+            + '\''
+            + ", stars="
+            + stars
+            + ", owner="
+            + owner
+            + '}';
+    }
+
     public static class Owner {
         @SerializedName("login")
         public final String login;
@@ -87,6 +107,10 @@ public class Repo {
             int result = login != null ? login.hashCode() : 0;
             result = 31 * result + (url != null ? url.hashCode() : 0);
             return result;
+        }
+
+        @Override public String toString() {
+            return "Owner{" + "login='" + login + '\'' + ", url='" + url + '\'' + '}';
         }
     }
 }

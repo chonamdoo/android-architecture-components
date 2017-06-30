@@ -113,8 +113,6 @@ public final class SearchState {
         + ", firstPageError='"
         + firstPageError
         + '\''
-        + ", results="
-        + results
         + ", nextPageLoading="
         + nextPageLoading
         + ", nextPageError='"
@@ -122,6 +120,8 @@ public final class SearchState {
         + '\''
         + ", searchNotStarted="
         + searchNotStarted
+        + ", results="
+        + results
         + '}';
   }
 
